@@ -4,6 +4,7 @@ import csv
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from itertools import groupby
 from pathlib import Path
 
 import requests
@@ -11,7 +12,7 @@ import requests
 API_URL = "https://api.energidataservice.dk/dataset"
 ATTEMPTS = 5
 DEFAULT_RETRY_AFTER = 60
-MONTH_PAUSE = 1
+REQUEST_PAUSE = 1
 RAW_DIR = Path("data/raw")
 FIXTURES_RAW_DIR = Path("data/fixtures/raw")
 FIXTURES_DIR = Path("tests/fixtures")
@@ -21,14 +22,15 @@ FIXTURES_DIR = Path("tests/fixtures")
 class Dataset:
     name: str
     utc_column: str
+    local_column: str
     periods_per_hour: int
     first_month: str
     last_month: str | None
 
 
 DATASETS = (
-    Dataset("Elspotprices", "HourUTC", 1, "2000-10", "2025-09"),
-    Dataset("DayAheadPrices", "TimeUTC", 4, "2025-10", None),
+    Dataset("Elspotprices", "HourUTC", "HourDK", 1, "2000-10", "2025-09"),
+    Dataset("DayAheadPrices", "TimeUTC", "TimeDK", 4, "2025-10", None),
 )
 
 
@@ -120,10 +122,26 @@ def request_records(
     return records
 
 
-def fetch_month(session: requests.Session, dataset: Dataset, month: str) -> list[dict]:
-    start = f"{month}-01"
-    end = f"{next_month(month)}-01"
-    return request_records(session, dataset, start, end, f"{dataset.name} {month}")
+def fetch_months(
+    session: requests.Session, dataset: Dataset, months: list[str]
+) -> dict[str, list[dict]]:
+    """Fetch consecutive months in one request and split the rows by local month."""
+    first, last = months[0], months[-1]
+    label = (
+        f"{dataset.name} {first}"
+        if first == last
+        else f"{dataset.name} {first}..{last}"
+    )
+    start = f"{first}-01"
+    end = f"{next_month(last)}-01"
+    rows_by_month = {month: [] for month in months}
+    for record in request_records(session, dataset, start, end, label):
+        rows_by_month[record[dataset.local_column][:7]].append(record)
+    return rows_by_month
+
+
+def months_by_year(months: list[str]) -> list[list[str]]:
+    return [list(group) for _, group in groupby(months, key=lambda month: month[:4])]
 
 
 def read_rows(path: Path) -> list[dict]:
@@ -178,21 +196,27 @@ def fetch_all(
         session = session or requests.Session()
     fetched = False
     for dataset in DATASETS:
-        for month in dataset_months(dataset, start, end, fixtures_dir):
-            path = raw_dir / dataset.name / f"{month}.csv"
-            if path.exists() and not force:
-                print(f"{dataset.name} {month} {len(read_rows(path))} skipped")
-                continue
-            if fixtures_dir is None:
+        months = dataset_months(dataset, start, end, fixtures_dir)
+        for year in months_by_year(months):
+            paths = {month: raw_dir / dataset.name / f"{month}.csv" for month in year}
+            missing = [month for month in year if force or not paths[month].exists()]
+            if missing and fixtures_dir is None:
                 if fetched:
-                    time.sleep(MONTH_PAUSE)
+                    time.sleep(REQUEST_PAUSE)
                 fetched = True
-                rows = fetch_month(session, dataset, month)
-                check_row_count(dataset, month, len(rows))
-            else:
-                rows = read_rows(fixtures_dir / dataset.name / f"{month}.csv")
-            write_rows(path, rows)
-            print(f"{dataset.name} {month} {len(rows)} written")
+                rows_by_month = fetch_months(session, dataset, year)
+            for month in year:
+                if month not in missing:
+                    rows = read_rows(paths[month])
+                    print(f"{dataset.name} {month} {len(rows)} skipped")
+                    continue
+                if fixtures_dir is None:
+                    rows = rows_by_month[month]
+                    check_row_count(dataset, month, len(rows))
+                else:
+                    rows = read_rows(fixtures_dir / dataset.name / f"{month}.csv")
+                write_rows(paths[month], rows)
+                print(f"{dataset.name} {month} {len(rows)} written")
 
 
 def main() -> None:
