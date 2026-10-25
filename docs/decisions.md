@@ -4,7 +4,7 @@
 
 Checked 2026-10-23 against api.energidataservice.dk.
 
-Hourly history: Elspotprices, columns HourUTC, HourDK, PriceArea, SpotPriceEUR, SpotPriceDKK.
+Hourly history: Elspotprices, columns HourUTC, HourDK, PriceArea, SpotPriceDKK, SpotPriceEUR.
 First DK2 price 2000-09-30T22:00 UTC (local 2000-10-01). Last row 2025-09-30T21:00 UTC. Discontinued, not updated.
 
 15-minute history: DayAheadPrices, columns TimeUTC, TimeDK, PriceArea, DayAheadPriceEUR, DayAheadPriceDKK.
@@ -17,16 +17,20 @@ EUR is the native price; DKK is derived from EUR since 2025-02-01.
 
 ## 2026-10-23 Why DK2 and not Denmark
 
-(your sentences: separate bidding zone, own price, Nordic grid, Copenhagen)
+Denmark has two bidding zones, DK1 west of the Great Belt and DK2 east of it, each with its own day-ahead price. There is no single Danish price to forecast. DK2 covers Zealand and Copenhagen and is coupled to Sweden (SE4) and to DK1, so its price moves with Nordic hydro and wind as much as with continental gas.
 
 ## 2026-10-23 Target is the hourly mean across the resolution change
 
-(your sentences: hourly price from Elspotprices up to 2025-09-30; from 2025-10-01 the arithmetic mean of the four DayAheadPriceEUR quarter-hours in each UTC hour; the report says so)
+The target is one price per hour. Up to 2025-09-30 it is SpotPriceEUR from Elspotprices. From 2025-10-01 it is the arithmetic mean of the four DayAheadPriceEUR values in each UTC hour. The quarter-hour structure is not modelled. The report states this.
 
 ## 2026-10-23 Cutoff 12:00 on D-1
 
-(your sentences: auction closes 12:00, results ~12:45-13:00; nothing published after 12:00 D-1)
+The day-ahead auction closes at 12:00 CET on the day before delivery and results are published around 12:45 to 13:00. A feature is allowed only if it was available before 12:00 on D-1. Anything published after that, including the auction result itself, is excluded.
 
 ## 2026-10-23 Energinet wind and solar forecasts are not usable
 
 Forecasts_Hour, from 2019-10-31. ForecastDayAhead is generated 17:50 and published 18:00 Danish time on D-1. ForecastIntraday is issued 06:00 on the delivery day. Only ForecastCurrent carries a per-row issue timestamp. All columns are published after the 12:00 D-1 cutoff and are excluded. Recorded in the leakage audit as not allowed.
+
+## 2026-10-25 API rate limit and yearly requests
+
+Elspotprices returned 429 after a few requests, with Retry-After around 300 seconds. DayAheadPrices was not throttled. The fetcher moved from one request per month to one per calendar year, still writing one file per month with the row-count check per month. A 429 is retried after waiting Retry-After, and each retry is printed. The full history is 300 hourly months, 219,144 rows, and 12 fifteen-minute months, 35,040 rows.
