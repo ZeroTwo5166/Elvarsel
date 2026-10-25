@@ -118,7 +118,7 @@ def test_row_count_check_rejects_short_or_long_months(dataset, month, rows):
         fetch.check_row_count(dataset, month, rows)
 
 
-def test_retries_server_errors_then_succeeds(sleeps):
+def test_retries_server_errors_then_succeeds(sleeps, capsys):
     session = FakeSession(
         [
             fake_response(503),
@@ -132,6 +132,10 @@ def test_retries_server_errors_then_succeeds(sleeps):
     assert len(rows_by_month["2024-10"]) == 745
     assert session.calls == 3
     assert sleeps == [1, 2]
+    assert capsys.readouterr().out.splitlines() == [
+        "Elspotprices 2024-10 attempt 1/5 503, retry in 1s",
+        "Elspotprices 2024-10 attempt 2/5 ConnectionError, retry in 2s",
+    ]
 
 
 def test_gives_up_after_five_attempts_naming_dataset_and_months(sleeps):
@@ -165,6 +169,22 @@ def test_rate_limit_waits_retry_after_then_succeeds(sleeps):
     assert len(rows_by_month["2024-10"]) == 745
     assert session.calls == 2
     assert sleeps == [257]
+
+
+def test_rate_limit_retry_prints_dataset_months_attempt_and_wait(sleeps, capsys):
+    months = fetch.months_between("2024-01", "2024-12")
+    session = FakeSession(
+        [
+            fake_response(429, headers={"Retry-After": "283"}),
+            records_response(full_months(*months)),
+        ]
+    )
+
+    fetch.fetch_months(session, SPOT, months)
+
+    assert capsys.readouterr().out.splitlines() == [
+        "Elspotprices 2024-01..2024-12 attempt 1/5 429, retry in 283s"
+    ]
 
 
 def test_rate_limit_without_retry_after_waits_default(sleeps):

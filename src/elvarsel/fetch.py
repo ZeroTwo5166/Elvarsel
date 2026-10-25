@@ -88,6 +88,7 @@ def get_with_retry(
             response = session.get(url, params=params, timeout=60)
         except (requests.ConnectionError, requests.Timeout) as error:
             failure = error
+            reason = type(error).__name__
         else:
             if response.status_code == 429:
                 wait = int(response.headers.get("Retry-After", DEFAULT_RETRY_AFTER))
@@ -97,7 +98,9 @@ def get_with_retry(
             failure = requests.HTTPError(
                 f"{response.status_code} from {response.url}", response=response
             )
+            reason = str(response.status_code)
         if attempt < ATTEMPTS:
+            print(f"{label} attempt {attempt}/{ATTEMPTS} {reason}, retry in {wait}s")
             time.sleep(wait)
     raise RuntimeError(f"{label}: failed after {ATTEMPTS} attempts") from failure
 
