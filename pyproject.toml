@@ -3,6 +3,7 @@ name = "elvarsel"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+    "holidays>=0.107",
     "pandas>=3.1.0",
     "requests>=2.34.2",
 ]
