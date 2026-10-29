@@ -34,3 +34,13 @@ Forecasts_Hour, from 2019-10-31. ForecastDayAhead is generated 17:50 and publish
 ## 2026-10-25 API rate limit and yearly requests
 
 Elspotprices returned 429 after a few requests, with Retry-After around 300 seconds. DayAheadPrices was not throttled. The fetcher moved from one request per month to one per calendar year, still writing one file per month with the row-count check per month. A 429 is retried after waiting Retry-After, and each retry is printed. The full history is 300 hourly months, 219,144 rows, and 12 fifteen-minute months, 35,040 rows.
+
+## 2026-10-29 Split dates
+
+Fixed 2026-10-29, before any model exists. Delivery days are kept whole. The data begins 2000-10-01 local, so the first complete year is 2001; the last complete month is September 2026.
+
+Train: calendar years 2001 through 2024.
+Validation: 2025. Used for feature choices and the hyperparameter grid.
+Test: 2026-01-01 through 2026-09-30. Untouched until the final run.
+
+Why chronological: a random split puts hours from the same day, and from days adjacent to the test rows, into training. With lags of 24 and 168 hours the model would be scored on days it has already seen through their neighbours. The only honest question is whether the model predicts days that come after everything it was trained on.
