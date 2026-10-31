@@ -60,3 +60,23 @@ On DST transition days a local day has 23 or 25 delivery periods. A local-clock 
 ## 2026-10-31 Extreme-price threshold
 
 High prices are defined as above 124.93 EUR/MWh, the 95th percentile of hourly price over the train period (2001-2024, 210,384 hours). It is a fixed constant, not recomputed, so a re-fetch cannot move it, and it uses no validation or test data. The train period spans very different price levels: the yearly 95th percentile ranges from 34 (2001) to 503 (2022). As a result, 15.22% of scored validation hours (1,333) are above the threshold, against 5% in train. The share is reported next to every band. The 99th percentile (309.10) was considered and rejected because it leaves too few 2025 hours to score.
+
+## 2026-11-01 Ridge alpha
+
+Alpha is chosen from {0.01, 0.1, 1, 10, 100, 1000} by validation MAE. 1000 was chosen, but the grid is flat: MAE ranges from 28.058 to 28.062. Extending the grid would not change the result. Because validation chose alpha, the validation MAE for ridge is slightly optimistic. The test run in M5 gives the unbiased number.
+
+## 2026-11-01 Encoding for ridge
+
+Hour, weekday and month are one-hot encoded inside the pipeline, with categories learned on train only and unseen values ignored. All levels are kept, so coefficients are only comparable within one calendar column. Lags and rolling statistics are standardised on train. Holiday flags stay 0/1. Encoding is part of the model, so the feature set and leakage audit are unchanged.
+
+## 2026-11-01 Common scoring rows
+
+All candidates are scored on the same rows: those with a target and every model feature present. On the real data this is the same 8,759 validation rows as before, so baseline numbers did not change.
+
+## 2026-11-01 Fixture month for 2025
+
+Elspotprices 2025-01 is added to the fixtures, copied from the real raw data, so the fixture validation split has scored rows (408). The end-to-end fixture test then runs the same alpha grid and scoring as the real run, with no fixture-only code path.
+
+## 2026-11-01 Empty validation split
+
+A split with 0 scored rows raises an error naming the split, instead of falling back to a default alpha. A silent fallback would produce a report that looks valid but scores nothing.
