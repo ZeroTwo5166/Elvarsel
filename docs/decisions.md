@@ -44,3 +44,19 @@ Validation: 2025. Used for feature choices and the hyperparameter grid.
 Test: 2026-01-01 through 2026-09-30. Untouched until the final run.
 
 Why chronological: a random split puts hours from the same day, and from days adjacent to the test rows, into training. With lags of 24 and 168 hours the model would be scored on days it has already seen through their neighbours. The only honest question is whether the model predicts days that come after everything it was trained on.
+
+## 2026-10-31 MAPE is not reported
+
+DK2 has zero and negative prices. Percentage error is undefined at zero and blows up near it, so MAPE would be dominated by a handful of hours. Validation 2025 has 289 hours at or below 0 EUR/MWh (3.30% of scored rows). MAE in EUR/MWh is the headline metric; RMSE is reported alongside it to show the weight of large misses. The count of hours at or below zero is reported so the reader sees why.
+
+## 2026-10-31 Splits are chronological, on whole delivery days
+
+Split membership is decided by local delivery day, never by row, so a 23- or 25-period DST day always lands whole in one split. Test is not scored until the final run: evaluate.py raises if test rows are requested without an explicit flag, nothing passes it, and the report script drops test rows right after reading the features file.
+
+## 2026-10-31 Lags are elapsed hours, not local clock hours
+
+On DST transition days a local day has 23 or 25 delivery periods. A local-clock lag of 24 hours would point at the wrong interval, or at a local hour that does not exist or occurs twice. Lags are counted in elapsed UTC hours instead. Hour of day stays local, because local time drives demand. Consequence: on an autumn transition day, 24 elapsed hours before the last period (23:00 local) is 00:00 of the same delivery day, which is not known at the cutoff, so lag_24 is masked. This is the only source of excluded rows: 24 in train, 1 in validation.
+
+## 2026-10-31 Extreme-price threshold
+
+High prices are defined as above 124.93 EUR/MWh, the 95th percentile of hourly price over the train period (2001-2024, 210,384 hours). It is a fixed constant, not recomputed, so a re-fetch cannot move it, and it uses no validation or test data. The train period spans very different price levels: the yearly 95th percentile ranges from 34 (2001) to 503 (2022). As a result, 15.22% of scored validation hours (1,333) are above the threshold, against 5% in train. The share is reported next to every band. The 99th percentile (309.10) was considered and rejected because it leaves too few 2025 hours to score.
