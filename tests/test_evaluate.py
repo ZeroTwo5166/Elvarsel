@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from elvarsel import clean, evaluate, features, fetch
+from elvarsel import clean, evaluate, features, fetch, models
 
 ROOT = Path(__file__).parent.parent
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -22,6 +22,15 @@ def hourly(start: str, end: str) -> pd.DataFrame:
 
 def local_times(index: pd.DatetimeIndex) -> list[str]:
     return list(index.tz_convert(clean.LOCAL_TZ).strftime("%Y-%m-%d %H:%M"))
+
+
+def write_features_csv(frame: pd.DataFrame, path: Path) -> Path:
+    frame.to_csv(path, lineterminator="\n")
+    return path
+
+
+def report_features() -> pd.DataFrame:
+    return features.build_features(hourly("2024-10-01", "2026-02-01"))
 
 
 @pytest.mark.parametrize(
@@ -73,7 +82,7 @@ def test_test_split_needs_explicit_flag():
 
 
 def test_excluded_counts_hold_out_test_and_count_autumn_mask():
-    frame = features.build_features(hourly("2024-12-20", "2026-01-05"))
+    frame = features.build_features(hourly("2024-12-01", "2026-01-05"))
 
     counts = evaluate.excluded_counts(frame)
 
@@ -81,7 +90,12 @@ def test_excluded_counts_hold_out_test_and_count_autumn_mask():
         "rows": 8760,
         "missing target": 0,
         "missing lag_24": 1,
+        "missing lag_48": 0,
+        "missing lag_72": 0,
         "missing lag_168": 0,
+        "missing lag_336": 0,
+        "missing roll_mean_168": 1,
+        "missing roll_std_168": 1,
         "excluded": 1,
         "scored": 8759,
     }
@@ -118,29 +132,115 @@ def test_extreme_scores_bands_and_shares():
     assert table.loc[evaluate.HIGH_BAND, "MAE a"] == 5.0
 
 
-def test_baselines_share_rows_and_third_is_mean_of_first_two():
-    index = pd.date_range("2025-01-01", periods=4, freq="h", tz="UTC")
-    frame = pd.DataFrame(
-        {
-            "price_eur": [10.0, 20.0, 30.0, float("nan")],
-            "lag_24": [12.0, 15.0, float("nan"), 1.0],
-            "lag_168": [8.0, 25.0, 30.0, 1.0],
-        },
-        index=index,
-    )
+def test_candidates_share_rows_and_third_baseline_is_mean_of_first_two():
+    frame = features.build_features(hourly("2024-01-01", "2024-03-01"))
+    frame.loc["2024-02-10T05:00", "price_eur"] = float("nan")
+    ridge = models.fit_ridge(frame, 1.0)
 
-    errors = evaluate.baseline_errors(frame)
+    errors = evaluate.candidate_errors(frame, ridge)
 
-    assert errors.index.equals(index[:2])
+    expected = frame.dropna(subset=["price_eur", *models.MODEL_FEATURES]).index
+    assert errors.index.equals(expected)
+    assert errors.columns.tolist() == [
+        "persistence_24",
+        "persistence_168",
+        "mean_24_168",
+        "ridge",
+    ]
     assert errors.notna().all().all()
-    assert errors["persistence_24"].tolist() == [2.0, -5.0]
-    assert errors["persistence_168"].tolist() == [-2.0, 5.0]
-    assert errors["mean_24_168"].tolist() == [0.0, 0.0]
+    rows = frame.loc[expected]
+    pd.testing.assert_series_equal(
+        errors["persistence_24"],
+        rows["lag_24"] - rows["price_eur"],
+        check_names=False,
+    )
     pd.testing.assert_series_equal(
         errors["mean_24_168"],
         (errors["persistence_24"] + errors["persistence_168"]) / 2,
         check_names=False,
     )
+
+
+def test_ridge_is_fitted_on_train_rows_only(monkeypatch):
+    fitted = []
+
+    def recording_fit(train, alpha):
+        fitted.append(train.index)
+        return models.fit_ridge(train, alpha)
+
+    monkeypatch.setattr(evaluate, "fit_ridge", recording_fit)
+
+    evaluate.validation_report(report_features())
+
+    assert len(fitted) == len(models.ALPHAS)
+    for index in fitted:
+        assert evaluate.delivery_day(index).max() < pd.Timestamp("2025-01-01")
+        assert evaluate.in_split(index, *evaluate.SPLITS["train"]).all()
+
+
+def test_alpha_is_chosen_by_validation_mae():
+    frame = report_features()
+    train = evaluate.split_rows(frame, "train")
+    validation = evaluate.split_rows(frame, "validation")
+
+    grid, ridge = evaluate.alpha_grid(train, validation)
+
+    assert grid.index.tolist() == list(models.ALPHAS)
+    assert ridge.named_steps["ridge"].alpha == grid["MAE"].idxmin()
+    assert (grid["rows"] == len(evaluate.scored_rows(validation))).all()
+
+
+def test_alpha_grid_raises_when_validation_has_no_scored_rows():
+    frame = report_features()
+    train = evaluate.split_rows(frame, "train")
+    validation = evaluate.split_rows(frame, "validation").assign(lag_336=np.nan)
+
+    with pytest.raises(
+        ValueError, match="validation split has 0 scored rows out of 8760"
+    ):
+        evaluate.alpha_grid(train, validation)
+
+
+def test_report_never_requests_test_split(tmp_path, monkeypatch):
+    path = write_features_csv(report_features(), tmp_path / "features.csv")
+    requested = []
+    split_rows = evaluate.split_rows
+
+    def recording_split(frame, name, allow_test=False):
+        requested.append((name, allow_test))
+        return split_rows(frame, name, allow_test)
+
+    monkeypatch.setattr(evaluate, "split_rows", recording_split)
+
+    evaluate.write_report(path, tmp_path / "report.md")
+
+    assert requested
+    assert {name for name, _ in requested} <= {"train", "validation"}
+    assert not any(allow_test for _, allow_test in requested)
+
+
+def test_2026_rows_cannot_change_the_report(tmp_path):
+    frame = report_features()
+    in_test = evaluate.in_split(frame.index, *evaluate.SPLITS["test"])
+    assert in_test.any()
+    absurd = frame.copy()
+    absurd.loc[in_test, ["price_eur", *models.PRICE_FEATURES]] = 1e9
+    variants = {
+        "real": frame,
+        "absurd": absurd,
+        "dropped": frame[~in_test],
+    }
+
+    reports = {
+        name: evaluate.write_report(
+            write_features_csv(variant, tmp_path / f"{name}.csv"),
+            tmp_path / f"{name}.md",
+        )
+        for name, variant in variants.items()
+    }
+
+    assert reports["real"] == reports["absurd"] == reports["dropped"]
+    assert "| ridge |" in reports["real"]
 
 
 def test_script_writes_fixture_report_only_to_fixture_path(tmp_path):
@@ -156,5 +256,21 @@ def test_script_writes_fixture_report_only_to_fixture_path(tmp_path):
     report = (tmp_path / evaluate.FIXTURES_REPORT_PATH).read_text(encoding="utf-8")
     assert not (tmp_path / evaluate.REPORT_PATH).exists()
     assert "| test | held out | held out |" in report
-    for title in ["Overall", "By local hour of day", "By local month"]:
+    ridge_row = next(
+        line for line in report.splitlines() if line.startswith("| ridge |")
+    )
+    assert int(ridge_row.split("|")[2]) > 0
+    for title in [
+        "Overall",
+        "By local hour of day",
+        "By local month",
+        "Extreme prices",
+        "Ridge alpha grid",
+        "Ridge coefficients",
+    ]:
         assert f"## {title}" in report
+    for table in ["hour", "month", "band"]:
+        header = next(
+            line for line in report.splitlines() if line[2:].startswith(table)
+        )
+        assert "MAE ridge" in header and "RMSE ridge" in header

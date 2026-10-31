@@ -63,6 +63,7 @@ def test_fixtures_mode_writes_expected_files(tmp_path):
     assert written == [
         Path("DayAheadPrices/2025-10.csv"),
         Path("Elspotprices/2024-10.csv"),
+        Path("Elspotprices/2025-01.csv"),
     ]
     for path in written:
         assert (tmp_path / path).read_bytes() == (FIXTURES / path).read_bytes()
@@ -77,6 +78,7 @@ def test_second_run_skips_existing_months(tmp_path, capsys):
     lines = capsys.readouterr().out.splitlines()
     assert lines == [
         "Elspotprices 2024-10 745 skipped",
+        "Elspotprices 2025-01 744 skipped",
         "DayAheadPrices 2025-10 100 skipped",
     ]
 

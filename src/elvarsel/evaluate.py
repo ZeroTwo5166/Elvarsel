@@ -4,13 +4,22 @@ from numbers import Integral
 from pathlib import Path
 
 import pandas as pd
+from sklearn.pipeline import Pipeline
 
 from elvarsel.baselines import INPUTS, baseline_predictions
 from elvarsel.clean import LOCAL_TZ
 from elvarsel.features import FEATURES_PATH, FIXTURES_FEATURES_PATH, TARGET
+from elvarsel.models import (
+    ALPHAS,
+    MODEL_FEATURES,
+    PRICE_FEATURES,
+    fit_ridge,
+    ridge_coefficients,
+    ridge_predictions,
+)
 
-REPORT_PATH = Path("reports/baselines-validation.md")
-FIXTURES_REPORT_PATH = Path("reports/fixtures/baselines-validation.md")
+REPORT_PATH = Path("reports/validation.md")
+FIXTURES_REPORT_PATH = Path("reports/fixtures/validation.md")
 SPLITS = {
     "train": ("2001-01-01", "2025-01-01"),
     "validation": ("2025-01-01", "2026-01-01"),
@@ -42,12 +51,14 @@ def split_rows(
 
 
 def scored_rows(frame: pd.DataFrame) -> pd.DataFrame:
-    return frame.dropna(subset=[TARGET, *INPUTS])
+    return frame.dropna(subset=[TARGET, *INPUTS, *MODEL_FEATURES])
 
 
-def baseline_errors(frame: pd.DataFrame) -> pd.DataFrame:
+def candidate_errors(frame: pd.DataFrame, ridge: Pipeline) -> pd.DataFrame:
     rows = scored_rows(frame)
-    return baseline_predictions(rows).sub(rows[TARGET], axis=0)
+    predictions = baseline_predictions(rows)
+    predictions["ridge"] = ridge_predictions(ridge, rows)
+    return predictions.sub(rows[TARGET], axis=0)
 
 
 def mae(errors: pd.DataFrame) -> pd.Series:
@@ -77,6 +88,23 @@ def scores_by(errors: pd.DataFrame, key: pd.Series) -> pd.DataFrame:
     return table
 
 
+def alpha_grid(
+    train: pd.DataFrame, validation: pd.DataFrame
+) -> tuple[pd.DataFrame, Pipeline]:
+    rows = scored_rows(validation)
+    if rows.empty:
+        raise ValueError(
+            f"validation split has 0 scored rows out of {len(validation)}; "
+            "alpha cannot be chosen"
+        )
+    fits = {alpha: fit_ridge(train, alpha) for alpha in ALPHAS}
+    errors = pd.DataFrame(
+        {alpha: ridge_predictions(fit, rows) for alpha, fit in fits.items()}
+    ).sub(rows[TARGET], axis=0)
+    grid = overall_scores(errors)
+    return grid, fits[grid["MAE"].idxmin()]
+
+
 def price_band(price: pd.Series) -> pd.Series:
     band = pd.Series(None, index=price.index, dtype="object")
     band[price <= 0] = LOW_BAND
@@ -102,7 +130,10 @@ def excluded_counts(frame: pd.DataFrame) -> pd.DataFrame:
         counts[name] = {
             "rows": len(part),
             "missing target": int(part[TARGET].isna().sum()),
-            **{f"missing {lag}": int(part[lag].isna().sum()) for lag in INPUTS},
+            **{
+                f"missing {column}": int(part[column].isna().sum())
+                for column in PRICE_FEATURES
+            },
             "excluded": excluded,
             "scored": len(part) - excluded,
         }
@@ -133,10 +164,13 @@ def markdown_table(table: pd.DataFrame, index_name: str) -> str:
 
 def validation_report(frame: pd.DataFrame) -> str:
     validation = split_rows(frame, "validation")
-    errors = baseline_errors(validation)
+    grid, ridge = alpha_grid(split_rows(frame, "train"), validation)
+    alpha = ridge.named_steps["ridge"].alpha
+    grid.index = [f"{value:g}" for value in grid.index]
+    errors = candidate_errors(validation, ridge)
     rows = validation.loc[errors.index]
     sections = [
-        ("Overall", markdown_table(overall_scores(errors), "baseline")),
+        ("Overall", markdown_table(overall_scores(errors), "candidate")),
         (
             "By local hour of day",
             markdown_table(scores_by(errors, rows["hour"]), "hour"),
@@ -147,15 +181,35 @@ def validation_report(frame: pd.DataFrame) -> str:
             markdown_table(extreme_scores(errors, rows[TARGET]), "band"),
         ),
         (
-            "Rows excluded for missing target or lags",
+            "Ridge alpha grid",
+            "Ridge is fitted on train for each alpha and scored on validation. "
+            f"Chosen alpha: {alpha:g}, the lowest validation MAE. Because "
+            "validation chose it, its validation MAE is slightly optimistic; the "
+            "single test run is the unbiased number.\n\n"
+            + markdown_table(grid, "alpha"),
+        ),
+        (
+            f"Ridge coefficients, alpha {alpha:g}",
+            "Lags and rolling statistics are standardised with train mean and "
+            "standard deviation, so their coefficients are EUR/MWh per train "
+            "standard deviation. Hour, weekday and month are one-hot and the "
+            "holiday flags are 0/1, so their coefficients are EUR/MWh. Every "
+            "level of each calendar column is encoded, so only differences "
+            "within a column are meaningful.\n\n"
+            + markdown_table(ridge_coefficients(ridge), "input"),
+        ),
+        (
+            "Rows excluded for missing target or price features",
             markdown_table(excluded_counts(frame), "split"),
         ),
     ]
     text = [
-        "# Baselines on validation (2025)",
+        "# Baselines and ridge on validation (2025)",
         "",
-        "EUR/MWh. All three baselines are scored on the same rows. Lags are "
-        "elapsed UTC hours; hour and month are local time.",
+        "EUR/MWh. All candidates are scored on the same rows. Lags are elapsed "
+        "UTC hours; hour and month are local time. Ridge is fitted on train "
+        "(2001-2024); its scaling and one-hot encoding are fitted inside the "
+        "pipeline on train rows only.",
     ]
     for title, table in sections:
         text += ["", f"## {title}", "", table]
@@ -172,7 +226,9 @@ def write_report(features_path: Path, path: Path) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Score the baselines on validation.")
+    parser = argparse.ArgumentParser(
+        description="Score the baselines and ridge on validation."
+    )
     parser.add_argument(
         "--fixtures", action="store_true", help="read data/fixtures/features"
     )

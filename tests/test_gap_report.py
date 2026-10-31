@@ -11,16 +11,20 @@ FIXTURES = Path(__file__).parent / "fixtures"
 SPOT, DAYAHEAD = fetch.DATASETS
 
 
-def test_fixture_months_have_no_gaps_or_duplicates(tmp_path):
+def test_fixture_gaps_are_only_between_fixture_months(tmp_path):
     results = gap_report.write_report(FIXTURES, tmp_path / "gaps.md")
 
     for result in results:
-        assert result.gaps == []
         assert result.duplicates == {}
     spot, dayahead = results
+    assert dayahead.gaps == []
+    assert [
+        (gap_report.timestamp(gap.start), gap_report.timestamp(gap.end), gap.intervals)
+        for gap in spot.gaps
+    ] == [("2024-10-31T23:00", "2024-12-31T23:00", 1464)]
     assert (spot.rows, timestamp_pair(spot)) == (
-        745,
-        ("2024-09-30T22:00", "2024-10-31T22:00"),
+        1489,
+        ("2024-09-30T22:00", "2025-01-31T22:00"),
     )
     assert (dayahead.rows, timestamp_pair(dayahead)) == (
         100,
@@ -80,7 +84,7 @@ def test_script_writes_report_from_fixture_dir(tmp_path):
 
     report = (tmp_path / gap_report.FIXTURES_REPORT_PATH).read_text(encoding="utf-8")
     assert report.startswith("| dataset | key | rows |")
-    assert "| Elspotprices | HourUTC | 745 |" in report
+    assert "| Elspotprices | HourUTC | 1489 |" in report
     assert not (tmp_path / gap_report.REPORT_PATH).exists()
 
 
