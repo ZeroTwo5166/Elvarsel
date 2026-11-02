@@ -136,8 +136,9 @@ def test_candidates_share_rows_and_third_baseline_is_mean_of_first_two():
     frame = features.build_features(hourly("2024-01-01", "2024-03-01"))
     frame.loc["2024-02-10T05:00", "price_eur"] = float("nan")
     ridge = models.fit_ridge(frame, 1.0)
+    hgb = models.fit_hgb(frame, models.HGB_GRID[0])
 
-    errors = evaluate.candidate_errors(frame, ridge)
+    errors = evaluate.candidate_errors(frame, ridge, hgb)
 
     expected = frame.dropna(subset=["price_eur", *models.MODEL_FEATURES]).index
     assert errors.index.equals(expected)
@@ -146,6 +147,7 @@ def test_candidates_share_rows_and_third_baseline_is_mean_of_first_two():
         "persistence_168",
         "mean_24_168",
         "ridge",
+        "hgb",
     ]
     assert errors.notna().all().all()
     rows = frame.loc[expected]
@@ -178,6 +180,22 @@ def test_ridge_is_fitted_on_train_rows_only(monkeypatch):
         assert evaluate.in_split(index, *evaluate.SPLITS["train"]).all()
 
 
+def test_hgb_is_fitted_on_train_rows_only(monkeypatch):
+    fitted = []
+
+    def recording_fit(train, params):
+        fitted.append(train.index)
+        return models.fit_hgb(train, params)
+
+    monkeypatch.setattr(evaluate, "fit_hgb", recording_fit)
+
+    evaluate.validation_report(report_features())
+
+    assert len(fitted) == len(models.HGB_GRID)
+    for index in fitted:
+        assert evaluate.in_split(index, *evaluate.SPLITS["train"]).all()
+
+
 def test_alpha_is_chosen_by_validation_mae():
     frame = report_features()
     train = evaluate.split_rows(frame, "train")
@@ -190,6 +208,20 @@ def test_alpha_is_chosen_by_validation_mae():
     assert (grid["rows"] == len(evaluate.scored_rows(validation))).all()
 
 
+def test_hgb_params_are_chosen_by_validation_mae():
+    frame = report_features()
+    train = evaluate.split_rows(frame, "train")
+    validation = evaluate.split_rows(frame, "validation")
+
+    grid, hgb = evaluate.hgb_grid(train, validation)
+
+    assert grid.index.tolist()[0] == "lr=0.05 iter=200 leaves=15"
+    assert len(set(grid.index)) == len(models.HGB_GRID)
+    chosen = evaluate.hgb_label(hgb.named_steps["hgb"].get_params())
+    assert chosen == grid["MAE"].idxmin()
+    assert (grid["rows"] == len(evaluate.scored_rows(validation))).all()
+
+
 def test_alpha_grid_raises_when_validation_has_no_scored_rows():
     frame = report_features()
     train = evaluate.split_rows(frame, "train")
@@ -199,6 +231,8 @@ def test_alpha_grid_raises_when_validation_has_no_scored_rows():
         ValueError, match="validation split has 0 scored rows out of 8760"
     ):
         evaluate.alpha_grid(train, validation)
+    with pytest.raises(ValueError, match="parameters cannot be chosen"):
+        evaluate.hgb_grid(train, validation)
 
 
 def test_report_never_requests_test_split(tmp_path, monkeypatch):
@@ -241,6 +275,7 @@ def test_2026_rows_cannot_change_the_report(tmp_path):
 
     assert reports["real"] == reports["absurd"] == reports["dropped"]
     assert "| ridge |" in reports["real"]
+    assert "| hgb |" in reports["real"]
 
 
 def test_script_writes_fixture_report_only_to_fixture_path(tmp_path):
@@ -267,6 +302,7 @@ def test_script_writes_fixture_report_only_to_fixture_path(tmp_path):
         "Extreme prices",
         "Ridge alpha grid",
         "Ridge coefficients",
+        "Gradient boosting grid",
     ]:
         assert f"## {title}" in report
     for table in ["hour", "month", "band"]:
@@ -274,3 +310,4 @@ def test_script_writes_fixture_report_only_to_fixture_path(tmp_path):
             line for line in report.splitlines() if line[2:].startswith(table)
         )
         assert "MAE ridge" in header and "RMSE ridge" in header
+        assert "MAE hgb" in header and "RMSE hgb" in header

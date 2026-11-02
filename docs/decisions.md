@@ -80,3 +80,11 @@ Elspotprices 2025-01 is added to the fixtures, copied from the real raw data, so
 ## 2026-11-01 Empty validation split
 
 A split with 0 scored rows raises an error naming the split, instead of falling back to a default alpha. A silent fallback would produce a report that looks valid but scores nothing.
+
+## 2026-11-02 Gradient boosting grid
+
+Eight parameter sets, learning rate {0.05, 0.1} by iterations {200, 500} by leaves {15, 31}, chosen by validation MAE. The smallest set won: lr 0.05, 200 iterations, 15 leaves, MAE 28.01, RMSE 38.40. Every increase in capacity made validation worse, in order, up to 30.11 for the largest set. The chosen point is on the edge of the grid. The grid is not extended downwards: the train period spans 2001-2024 with price levels from 34 to 503 EUR/MWh at the 95th percentile, so more fitting capacity fits old regimes that 2025 does not share, and a smaller model is the right direction for the final run. Because validation chose the parameters, the validation MAE is optimistic; the test run gives the unbiased number.
+
+## 2026-11-02 Gradient boosting uses the raw features
+
+Hour, weekday and month go in as native categorical columns, lags and rolling statistics unscaled, holiday flags as 0/1. Trees do not need scaling or one-hot encoding, and categorical splits let the model treat hours and weekdays as groups rather than ordered values. The feature set is identical to ridge, so the leakage audit is unchanged and both learned models and all baselines score the same 8,759 validation rows.

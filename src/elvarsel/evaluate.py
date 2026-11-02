@@ -1,5 +1,6 @@
 import argparse
 import math
+from collections.abc import Callable, Mapping
 from numbers import Integral
 from pathlib import Path
 
@@ -11,9 +12,12 @@ from elvarsel.clean import LOCAL_TZ
 from elvarsel.features import FEATURES_PATH, FIXTURES_FEATURES_PATH, TARGET
 from elvarsel.models import (
     ALPHAS,
+    HGB_GRID,
     MODEL_FEATURES,
     PRICE_FEATURES,
+    fit_hgb,
     fit_ridge,
+    hgb_predictions,
     ridge_coefficients,
     ridge_predictions,
 )
@@ -54,10 +58,13 @@ def scored_rows(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.dropna(subset=[TARGET, *INPUTS, *MODEL_FEATURES])
 
 
-def candidate_errors(frame: pd.DataFrame, ridge: Pipeline) -> pd.DataFrame:
+def candidate_errors(
+    frame: pd.DataFrame, ridge: Pipeline, hgb: Pipeline
+) -> pd.DataFrame:
     rows = scored_rows(frame)
     predictions = baseline_predictions(rows)
     predictions["ridge"] = ridge_predictions(ridge, rows)
+    predictions["hgb"] = hgb_predictions(hgb, rows)
     return predictions.sub(rows[TARGET], axis=0)
 
 
@@ -88,21 +95,51 @@ def scores_by(errors: pd.DataFrame, key: pd.Series) -> pd.DataFrame:
     return table
 
 
-def alpha_grid(
-    train: pd.DataFrame, validation: pd.DataFrame
+def validation_grid(
+    train: pd.DataFrame,
+    validation: pd.DataFrame,
+    candidates: Mapping[object, object],
+    fit: Callable[[pd.DataFrame, object], Pipeline],
+    predict: Callable[[Pipeline, pd.DataFrame], pd.Series],
+    chosen: str,
 ) -> tuple[pd.DataFrame, Pipeline]:
     rows = scored_rows(validation)
     if rows.empty:
         raise ValueError(
             f"validation split has 0 scored rows out of {len(validation)}; "
-            "alpha cannot be chosen"
+            f"{chosen} cannot be chosen"
         )
-    fits = {alpha: fit_ridge(train, alpha) for alpha in ALPHAS}
+    fits = {label: fit(train, value) for label, value in candidates.items()}
     errors = pd.DataFrame(
-        {alpha: ridge_predictions(fit, rows) for alpha, fit in fits.items()}
+        {label: predict(model, rows) for label, model in fits.items()}
     ).sub(rows[TARGET], axis=0)
     grid = overall_scores(errors)
     return grid, fits[grid["MAE"].idxmin()]
+
+
+def alpha_grid(
+    train: pd.DataFrame, validation: pd.DataFrame
+) -> tuple[pd.DataFrame, Pipeline]:
+    alphas = {alpha: alpha for alpha in ALPHAS}
+    return validation_grid(
+        train, validation, alphas, fit_ridge, ridge_predictions, "alpha"
+    )
+
+
+def hgb_label(params: Mapping[str, float]) -> str:
+    return (
+        f"lr={params['learning_rate']:g} iter={params['max_iter']} "
+        f"leaves={params['max_leaf_nodes']}"
+    )
+
+
+def hgb_grid(
+    train: pd.DataFrame, validation: pd.DataFrame
+) -> tuple[pd.DataFrame, Pipeline]:
+    params = {hgb_label(values): values for values in HGB_GRID}
+    return validation_grid(
+        train, validation, params, fit_hgb, hgb_predictions, "parameters"
+    )
 
 
 def price_band(price: pd.Series) -> pd.Series:
@@ -163,11 +200,14 @@ def markdown_table(table: pd.DataFrame, index_name: str) -> str:
 
 
 def validation_report(frame: pd.DataFrame) -> str:
+    train = split_rows(frame, "train")
     validation = split_rows(frame, "validation")
-    grid, ridge = alpha_grid(split_rows(frame, "train"), validation)
+    grid, ridge = alpha_grid(train, validation)
     alpha = ridge.named_steps["ridge"].alpha
     grid.index = [f"{value:g}" for value in grid.index]
-    errors = candidate_errors(validation, ridge)
+    boosting, hgb = hgb_grid(train, validation)
+    chosen = hgb_label(hgb.named_steps["hgb"].get_params())
+    errors = candidate_errors(validation, ridge, hgb)
     rows = validation.loc[errors.index]
     sections = [
         ("Overall", markdown_table(overall_scores(errors), "candidate")),
@@ -199,17 +239,26 @@ def validation_report(frame: pd.DataFrame) -> str:
             + markdown_table(ridge_coefficients(ridge), "input"),
         ),
         (
+            "Gradient boosting grid",
+            "Gradient boosting is fitted on train for each parameter set and "
+            f"scored on validation; the chosen set, {chosen}, has the lowest "
+            "validation MAE. Because validation chose it, its validation MAE is "
+            "slightly optimistic for the same reason as the ridge alpha.\n\n"
+            + markdown_table(boosting, "parameters"),
+        ),
+        (
             "Rows excluded for missing target or price features",
             markdown_table(excluded_counts(frame), "split"),
         ),
     ]
     text = [
-        "# Baselines and ridge on validation (2025)",
+        "# Baselines, ridge and gradient boosting on validation (2025)",
         "",
         "EUR/MWh. All candidates are scored on the same rows. Lags are elapsed "
         "UTC hours; hour and month are local time. Ridge is fitted on train "
         "(2001-2024); its scaling and one-hot encoding are fitted inside the "
-        "pipeline on train rows only.",
+        "pipeline on train rows only. Gradient boosting is fitted on train with "
+        "the calendar columns as categoricals and no scaling.",
     ]
     for title, table in sections:
         text += ["", f"## {title}", "", table]
@@ -227,7 +276,7 @@ def write_report(features_path: Path, path: Path) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Score the baselines and ridge on validation."
+        description="Score the baselines, ridge and gradient boosting on validation."
     )
     parser.add_argument(
         "--fixtures", action="store_true", help="read data/fixtures/features"
