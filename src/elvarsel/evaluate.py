@@ -35,6 +35,7 @@ HIGH_PRICE_EUR = 124.93
 LOW_BAND = "at or below 0"
 HIGH_BAND = f"above {HIGH_PRICE_EUR}"
 HELD_OUT = "held out"
+WORST_DAYS = 20
 
 
 def delivery_day(index: pd.DatetimeIndex) -> pd.DatetimeIndex:
@@ -156,6 +157,16 @@ def extreme_scores(errors: pd.DataFrame, price: pd.Series) -> pd.DataFrame:
     return table
 
 
+def worst_days(errors: pd.DataFrame, price: pd.Series) -> pd.DataFrame:
+    day = delivery_day(errors.index)
+    table = errors.abs().groupby(day).mean().add_prefix("MAE ")
+    table.insert(0, "mean actual price", price.groupby(day).mean())
+    table.insert(0, "rows", errors.groupby(day).size())
+    table = table.nlargest(WORST_DAYS, "MAE hgb")
+    table.index = table.index.strftime("%Y-%m-%d")
+    return table
+
+
 def excluded_counts(frame: pd.DataFrame) -> pd.DataFrame:
     counts = {}
     for name in SPLITS:
@@ -209,6 +220,7 @@ def validation_report(frame: pd.DataFrame) -> str:
     chosen = hgb_label(hgb.named_steps["hgb"].get_params())
     errors = candidate_errors(validation, ridge, hgb)
     rows = validation.loc[errors.index]
+    worst = worst_days(errors, rows[TARGET])
     sections = [
         ("Overall", markdown_table(overall_scores(errors), "candidate")),
         (
@@ -219,6 +231,12 @@ def validation_report(frame: pd.DataFrame) -> str:
         (
             f"Extreme prices, high threshold {HIGH_PRICE_EUR} EUR/MWh (train p95)",
             markdown_table(extreme_scores(errors, rows[TARGET]), "band"),
+        ),
+        (
+            f"Worst {len(worst)} days by hgb MAE",
+            "Local delivery days ranked by hgb daily MAE, highest first; hgb has "
+            "the lowest overall validation MAE. Mean actual price and MAE are "
+            "over the scored rows of each day.\n\n" + markdown_table(worst, "date"),
         ),
         (
             "Ridge alpha grid",

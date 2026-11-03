@@ -132,6 +132,30 @@ def test_extreme_scores_bands_and_shares():
     assert table.loc[evaluate.HIGH_BAND, "MAE a"] == 5.0
 
 
+@pytest.mark.parametrize("days", [30, 5])
+def test_worst_days_are_at_most_20_and_sorted_by_hgb_mae(days):
+    index = pd.date_range(
+        "2024-12-31T23:00", periods=24 * days, freq="h", tz="UTC", name="time_utc"
+    )
+    rng = np.random.default_rng(0)
+    names = ["persistence_24", "persistence_168", "mean_24_168", "ridge", "hgb"]
+    errors = pd.DataFrame(
+        rng.normal(0, 30, (len(index), len(names))), index=index, columns=names
+    )
+    price = pd.Series(rng.normal(80, 20, len(index)), index=index)
+
+    table = evaluate.worst_days(errors, price)
+
+    assert len(table) == min(days, evaluate.WORST_DAYS)
+    assert table["MAE hgb"].is_monotonic_decreasing
+    assert table.columns.tolist() == [
+        "rows",
+        "mean actual price",
+        *(f"MAE {name}" for name in names),
+    ]
+    assert (table["rows"] == 24).all()
+
+
 def test_candidates_share_rows_and_third_baseline_is_mean_of_first_two():
     frame = features.build_features(hourly("2024-01-01", "2024-03-01"))
     frame.loc["2024-02-10T05:00", "price_eur"] = float("nan")
@@ -300,6 +324,7 @@ def test_script_writes_fixture_report_only_to_fixture_path(tmp_path):
         "By local hour of day",
         "By local month",
         "Extreme prices",
+        "Worst",
         "Ridge alpha grid",
         "Ridge coefficients",
         "Gradient boosting grid",
