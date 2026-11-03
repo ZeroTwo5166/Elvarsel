@@ -162,7 +162,7 @@ def worst_days(errors: pd.DataFrame, price: pd.Series) -> pd.DataFrame:
     table = errors.abs().groupby(day).mean().add_prefix("MAE ")
     table.insert(0, "mean actual price", price.groupby(day).mean())
     table.insert(0, "rows", errors.groupby(day).size())
-    table = table.nlargest(WORST_DAYS, "MAE hgb")
+    table = table.nlargest(WORST_DAYS, "MAE ridge")
     table.index = table.index.strftime("%Y-%m-%d")
     return table
 
@@ -233,10 +233,11 @@ def validation_report(frame: pd.DataFrame) -> str:
             markdown_table(extreme_scores(errors, rows[TARGET]), "band"),
         ),
         (
-            f"Worst {len(worst)} days by hgb MAE",
-            "Local delivery days ranked by hgb daily MAE, highest first; hgb has "
-            "the lowest overall validation MAE. Mean actual price and MAE are "
-            "over the scored rows of each day.\n\n" + markdown_table(worst, "date"),
+            f"Worst {len(worst)} days by ridge MAE",
+            "Local delivery days ranked by ridge daily MAE, highest first; ridge "
+            "is the model chosen for the test run (see docs/decisions.md). Mean "
+            "actual price and MAE are over the scored rows of each day.\n\n"
+            + markdown_table(worst, "date"),
         ),
         (
             "Ridge alpha grid",

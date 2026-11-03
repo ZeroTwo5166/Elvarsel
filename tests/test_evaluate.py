@@ -133,7 +133,7 @@ def test_extreme_scores_bands_and_shares():
 
 
 @pytest.mark.parametrize("days", [30, 5])
-def test_worst_days_are_at_most_20_and_sorted_by_hgb_mae(days):
+def test_worst_days_are_at_most_20_and_sorted_by_ridge_mae(days):
     index = pd.date_range(
         "2024-12-31T23:00", periods=24 * days, freq="h", tz="UTC", name="time_utc"
     )
@@ -147,7 +147,7 @@ def test_worst_days_are_at_most_20_and_sorted_by_hgb_mae(days):
     table = evaluate.worst_days(errors, price)
 
     assert len(table) == min(days, evaluate.WORST_DAYS)
-    assert table["MAE hgb"].is_monotonic_decreasing
+    assert table["MAE ridge"].is_monotonic_decreasing
     assert table.columns.tolist() == [
         "rows",
         "mean actual price",
@@ -330,6 +330,8 @@ def test_script_writes_fixture_report_only_to_fixture_path(tmp_path):
         "Gradient boosting grid",
     ]:
         assert f"## {title}" in report
+    worst = next(line for line in report.splitlines() if line.startswith("## Worst"))
+    assert worst.endswith("days by ridge MAE")
     for table in ["hour", "month", "band"]:
         header = next(
             line for line in report.splitlines() if line[2:].startswith(table)
