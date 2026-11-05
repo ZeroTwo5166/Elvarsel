@@ -59,14 +59,20 @@ def scored_rows(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.dropna(subset=[TARGET, *INPUTS, *MODEL_FEATURES])
 
 
-def candidate_errors(
-    frame: pd.DataFrame, ridge: Pipeline, hgb: Pipeline
-) -> pd.DataFrame:
+def baseline_and_ridge_errors(frame: pd.DataFrame, ridge: Pipeline) -> pd.DataFrame:
     rows = scored_rows(frame)
     predictions = baseline_predictions(rows)
     predictions["ridge"] = ridge_predictions(ridge, rows)
-    predictions["hgb"] = hgb_predictions(hgb, rows)
     return predictions.sub(rows[TARGET], axis=0)
+
+
+def candidate_errors(
+    frame: pd.DataFrame, ridge: Pipeline, hgb: Pipeline
+) -> pd.DataFrame:
+    errors = baseline_and_ridge_errors(frame, ridge)
+    rows = scored_rows(frame)
+    errors["hgb"] = hgb_predictions(hgb, rows) - rows[TARGET]
+    return errors
 
 
 def mae(errors: pd.DataFrame) -> pd.Series:
@@ -167,13 +173,13 @@ def worst_days(errors: pd.DataFrame, price: pd.Series) -> pd.DataFrame:
     return table
 
 
-def excluded_counts(frame: pd.DataFrame) -> pd.DataFrame:
+def excluded_counts(frame: pd.DataFrame, allow_test: bool = False) -> pd.DataFrame:
     counts = {}
     for name in SPLITS:
-        if name == TEST_SPLIT:
+        if name == TEST_SPLIT and not allow_test:
             counts[name] = dict.fromkeys(counts["train"], HELD_OUT)
             continue
-        part = split_rows(frame, name)
+        part = split_rows(frame, name, allow_test)
         excluded = len(part) - len(scored_rows(part))
         counts[name] = {
             "rows": len(part),
