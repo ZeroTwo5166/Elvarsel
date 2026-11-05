@@ -182,7 +182,7 @@ No adjectives. Numbers and sentences.
 - [ ] Error analysis on validation: by hour, by month, worst 20 days.
 - [ ] Decision entry: what the model learned that the baselines didn't, or didn't.
 
-**Milestone 4 — External features, if verifiable (Nov 5, skippable)** Energinet wind and solar forecasts are published after the 12:00 D-1 cutoff and are excluded, so this milestone is DMI-only or skipped.
+**Milestone 4 — External features, if verifiable (Nov 5, skipped)** Energinet wind and solar forecasts are published after the 12:00 D-1 cutoff and are excluded, so this milestone is DMI-only or skipped. Skipped 2026-11-05: no verifiable DMI forecast archive; see `docs/decisions.md`.
 
 - [ ] DMI: only if an archive of past forecasts can be found. Otherwise one paragraph in Limitations.
 - [ ] Spark benchmark, only if DMI data enters. Three timings in the README.
