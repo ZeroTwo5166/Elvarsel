@@ -161,7 +161,7 @@ def write_report(raw_dir: Path, path: Path) -> list[DatasetGaps]:
         dataset_gaps(dataset, read_dataset(raw_dir, dataset)) for dataset in DATASETS
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(report_markdown(results), encoding="utf-8")
+    path.write_text(report_markdown(results), encoding="utf-8", newline="\n")
     return results
 
 
