@@ -23,13 +23,13 @@ EUR/MWh. Ridge MAE is 2.03 below the best baseline, mean_24_168, on test (29.58 
 
 ## 3. Where the model fails
 
-By hour. Ridge MAE on test is highest at hours 20 (42.99), 19 (39.73) and 21 (34.68). In hours 0 to 4 persistence_24 is lower than ridge on test (22.37 against 23.13 at hour 2); on validation ridge is lowest in every hour.
+By hour. Ridge MAE on test is highest at hours 20 (42.99), 19 (39.73) and 21 (34.68). In hours 0 to 4 persistence_24 is lower than ridge on test (22.37 against 23.13 at hour 2); on validation ridge is lowest in every hour among the four models run on test, but gradient boosting had a lower MAE than ridge in 13 of 24 hours (reports/validation.md).
 
 By month. Ridge MAE on test is highest in September (45.02) and March (36.18). A baseline is lower than ridge in May (mean_24_168, 21.40 against 21.97) and July (persistence_24, 28.46 against 28.64).
 
 Extreme prices. 2537 test hours, 38.73% of scored rows, are above the train p95 of 124.93 EUR/MWh, against 15.22% in validation. There ridge MAE is 33.10 against 34.74 for mean_24_168. 103 test hours (1.57%) are at or below zero. There ridge MAE is 29.67 against 11.06 for persistence_24, and only persistence_168 is higher (30.99).
 
-Worst days. Eight of the 20 worst test days are in September 2026, including the worst, 2026-09-22 (126.20), and the run 2026-09-19 to 2026-09-22. Four are in March. Mean actual price on these days ranges from 13.66 to 258.39. On 18 of the 20 at least one baseline is lower than ridge; on 2026-09-22 persistence_168 is 56.71. The tables do not show what happened in the market on these days.
+Worst days. Eight of the 20 worst test days are in September 2026, including the worst, 2026-09-22 (126.20), and the run 2026-09-19 to 2026-09-22. Four are in March. Mean actual price on these days ranges from 13.66 to 258.39. On 18 of the 20 at least one baseline is lower than ridge; on 2026-09-22 persistence_168 is 56.71. These days are listed, not explained: what happened in the market on them was not investigated.
 
 ## 4. Model choice
 

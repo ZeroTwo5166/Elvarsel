@@ -21,7 +21,7 @@ Denmark has two bidding zones, DK1 west of the Great Belt and DK2 east of it, ea
 
 ## 2026-10-23 Target is the hourly mean across the resolution change
 
-The target is one price per hour. Up to 2025-09-30 it is SpotPriceEUR from Elspotprices. From 2025-10-01 it is the arithmetic mean of the four DayAheadPriceEUR values in each UTC hour. The quarter-hour structure is not modelled. The report states this.
+The target is one price per hour. Up to 2025-09-30 it is SpotPriceEUR from Elspotprices. From 2025-10-01 it is the arithmetic mean of the four DayAheadPriceEUR values in each UTC hour. The quarter-hour structure is not modelled. The README and reports/report.md define the target this way.
 
 ## 2026-10-23 Cutoff 12:00 on D-1
 
@@ -43,15 +43,15 @@ Train: calendar years 2001 through 2024.
 Validation: 2025. Used for feature choices and the hyperparameter grid.
 Test: 2026-01-01 through 2026-09-30. Untouched until the final run.
 
-Why chronological: a random split puts hours from the same day, and from days adjacent to the test rows, into training. With lags of 24 and 168 hours the model would be scored on days it has already seen through their neighbours. The only honest question is whether the model predicts days that come after everything it was trained on.
+Why chronological: a random split puts hours from the same day, and from days adjacent to the test rows, into training. With lags of 24 and 168 hours the model would be scored on days it has already seen through their neighbours. The question is whether the model predicts days that come after everything it was trained on.
 
 ## 2026-10-31 MAPE is not reported
 
-DK2 has zero and negative prices. Percentage error is undefined at zero and blows up near it, so MAPE would be dominated by a handful of hours. Validation 2025 has 289 hours at or below 0 EUR/MWh (3.30% of scored rows). MAE in EUR/MWh is the headline metric; RMSE is reported alongside it to show the weight of large misses. The count of hours at or below zero is reported so the reader sees why.
+DK2 has zero and negative prices. Percentage error is undefined at zero and blows up near it, so MAPE would be dominated by a handful of hours. Validation 2025 has 289 hours at or below 0 EUR/MWh (3.30% of scored rows). MAE in EUR/MWh is the headline metric; RMSE is reported alongside it to show the weight of large misses. The count of hours at or below zero is reported with the errors, because those hours are the reason MAPE is not used.
 
 ## 2026-10-31 Splits are chronological, on whole delivery days
 
-Split membership is decided by local delivery day, never by row, so a 23- or 25-period DST day always lands whole in one split. Test is not scored until the final run: evaluate.py raises if test rows are requested without an explicit flag, nothing passes it, and the report script drops test rows right after reading the features file.
+Split membership is decided by local delivery day, never by row, so a 23- or 25-period DST day always lands whole in one split. Test is not scored until the final run: split_rows in evaluate.py raises if test rows are requested without allow_test=True. final_run.py passes it and no other module does; the tests pass it only to check the guard. evaluate.py also drops test rows right after reading the features file.
 
 ## 2026-10-31 Lags are elapsed hours, not local clock hours
 
@@ -91,8 +91,8 @@ Hour, weekday and month go in as native categorical columns, lags and rolling st
 
 ## 2026-11-03 Ridge goes to the test run
 
-Ridge (alpha 1000) and gradient boosting (lr 0.05, 200 iterations, 15 leaves) score 28.06 and 28.01 MAE on the validation year, against 30.23 for the best baseline. The 0.05 gap is not evidence of a difference: hourly errors are serially correlated, so the 8759 rows are far fewer independent observations than they look, and settling it would need a paired block bootstrap that this project does not do. Gradient boosting is better above the train p95 price (41.84 against 44.54) and in hours 6 to 9. Ridge is better in January, February and December. On the 20 days where ridge does worst, gradient boosting is better on 17; on the 20 days where gradient boosting does worst, ridge is better on 9. Neither wins overall. Ridge is chosen because it matches the accuracy with a model whose coefficients can be read: lag_24 carries most of the signal (28.41 per train standard deviation), Saturday and Sunday are 8.16 and 6.48 EUR/MWh below the average weekday, and a holiday is 5.90 below. Both models beat the best baseline by about 2 EUR/MWh. No run removes features to show where the gain comes from, so the entry does not claim that. Ridge is frozen from here. The test set is run once, with no re-fitting.
+Ridge (alpha 1000) and gradient boosting (lr 0.05, 200 iterations, 15 leaves) score 28.06 and 28.01 MAE on the validation year, against 30.23 for the best baseline. The 0.05 gap is not evidence of a difference: hourly errors are serially correlated, so the 8759 rows are far fewer independent observations than they look, and settling it would need a paired block bootstrap that this project does not do. In the breakdowns in reports/validation.md, gradient boosting has the lower MAE in 13 of 24 hours (1, 2, 3, 4, 5, 6, 7, 8, 9, 17, 19, 21 and 23), in 8 of 12 months (March to October) and in both price bands: at or below 0 (22.22 against 23.25) and above the train p95 (41.84 against 44.54). Ridge has the lower MAE in the other 11 hours and in January, February, November and December. On the 20 days where ridge does worst, gradient boosting is better on 17; on the 20 days where gradient boosting does worst, ridge is better on 9. Ridge is chosen because overall MAE is tied and its coefficients can be read: lag_24 carries most of the signal (28.41 per train standard deviation), Saturday and Sunday are 8.16 and 6.48 EUR/MWh below the average weekday, and a holiday is 5.90 below. Both models beat the best baseline by about 2 EUR/MWh. No feature ablation was run, so the gain is not attributed to any feature. Ridge is frozen from here. The test set is run once, with no re-fitting.
 
 ## 2026-11-05 Skip external features
 
-Milestone 4 is skipped. The Energinet wind and solar forecasts are published after the 12:00 D-1 cutoff and are already excluded (2026-10-23, Energinet wind and solar forecasts are not usable). DMI weather forecasts would be valid only as they were issued at the time, and no archive of past forecasts that could be verified was found. Observed weather would give the model information it would not have had at the cutoff. The model therefore uses price history and calendar features only. This goes in the report as a limitation: the model cannot see the main driver of the large price swings, which is wind and solar output.
+Milestone 4 is skipped. The Energinet wind and solar forecasts are published after the 12:00 D-1 cutoff and are already excluded (2026-10-23, Energinet wind and solar forecasts are not usable). DMI weather forecasts would be valid only as they were issued at the time, and no archive of past forecasts that could be verified was found. Observed weather would give the model information it would not have had at the cutoff. The model therefore uses price history and calendar features only. The cost of this decision is that the model cannot see the main driver of the large price swings, which is wind and solar output.
