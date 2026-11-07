@@ -17,7 +17,7 @@ In:
 - DK2 hourly spot prices, as many years as Energi Data Service holds, down to a final held-out test period.
 - Three baselines, two learned models, chronological evaluation.
 - Lagged prices and calendar features. External features (wind/solar/consumption forecasts, weather) only where a historical *forecast* series with a known publication time exists, never actuals.
-- A reproducible pipeline: fetch, clean, features, train, evaluate, from a clean clone with three commands.
+- A reproducible pipeline: fetch, clean, features, train, evaluate. From a clean clone: lint and tests, then the offline fixture pipeline as listed in the README. `final_run.py` has no `--fixtures` mode.
 - Tests on cleaning and feature construction, including daylight-saving days.
 - A leakage audit table and a two-page report.
 
@@ -48,7 +48,7 @@ This is the part interviewers will test. It is written down before any code.
 - Actual (settled, measured) production, consumption or weather for day D or for day D-1 after 12:00. Actuals for D-1 before noon are technically known but are a trap: it's easy to accidentally use the whole day. The rule for this project is: no actuals from day D-1 or later, in any feature.
 - Any feature whose publication time you cannot establish from the source's documentation.
 
-**Leakage audit.** `docs/leakage-audit.md` holds one table row per feature: name, source dataset, what it measures, when it is published relative to the cutoff, and whether it is allowed. A feature not in the table is not in the model. This file is written by hand.
+**Leakage audit.** `docs/leakage-audit.md` holds one table row per feature: name, source dataset, what it measures, when it is published relative to the cutoff, and whether it is allowed. A feature not in the table is not in the model.
 
 ## Data sources
 
@@ -57,14 +57,14 @@ Verify all dataset names, column names and history depth on day one; Energinet r
 **Energi Data Service (Energinet).** Public REST API, no key, JSON, filterable by price area and date range.
 
 - Day-ahead / spot prices for DK2. Expected columns: a UTC timestamp, a Danish local timestamp, price in DKK and EUR. Before any cleaning, establish and record in `docs/decisions.md`: whether each part of the history is hourly or 15-minute; whether timestamps mark interval start or end; the earliest date; and the duplicate and gap counts. The cleaning step then produces one row per hourly delivery interval, keyed by UTC interval start, with 15-minute periods averaged into their delivery hour. Hourly and quarter-hour observations are never mixed in one series without this step.
-- Forecast datasets for wind and solar production (Energinet publishes day-ahead forecasts, typically issued in the morning of D-1). A forecast series is usable only if each value carries an issue or publication timestamp, or the dataset's documentation guarantees when it is published. A historical forecast value with no evidence of when it became available is not a valid feature.
-- Actual production and consumption: downloaded for analysis and plots only, never as a feature for day D or D-1 (see contract).
+- Forecast datasets for wind and solar production (Energinet publishes day-ahead forecasts at 18:00 on D-1, after the cutoff; see `docs/decisions.md`). A forecast series is usable only if each value carries an issue or publication timestamp, or the dataset's documentation guarantees when it is published. A historical forecast value with no evidence of when it became available is not a valid feature.
+- Actual production and consumption: never a feature for day D or D-1 (see contract). Not downloaded.
 
 **DMI Open Data.** Free API key. Observations archive is large and well documented. Historical *forecasts* are the uncertain part; if an archive of past forecasts cannot be obtained, weather stays out of the model and the report says why. Do not substitute observations for forecasts.
 
 **Holidays.** The `holidays` Python package for Danish public holidays.
 
-Raw downloads are stored as Parquet under `data/raw/`, gitignored, with the fetch script able to recreate them. `data/processed/` likewise. A small fixed sample (one month, chosen to include a DST transition) is committed under `tests/fixtures/`. Every script accepts `--fixtures`, which reads only from `tests/fixtures/`, never calls an API and needs no key; that is what tests and the clean-clone check use.
+Raw downloads are stored as CSV under `data/raw/`, gitignored, with the fetch script able to recreate them. `data/clean/` and `data/features/` likewise. A small fixed sample is committed under `tests/fixtures/`: two months of `Elspotprices` (2024-10 and 2025-01) and one day of `DayAheadPrices` (2025-10-26); 2024-10 and 2025-10-26 include the 25-hour autumn day. Every step except `final_run.py` accepts `--fixtures`, which never calls an API and needs no key. Only fetch reads `tests/fixtures/`, copying it into `data/fixtures/`; the later steps read `data/fixtures/`. That is what tests and the clean-clone check use.
 
 ## Evaluation design
 
@@ -95,7 +95,7 @@ Where a lagged value does not exist (the first rows of the series, or a gap in t
 
 Features for both: price lags at 24, 48, 72, 168, 336 elapsed hours; rolling mean and standard deviation over the 168 elapsed hours ending 24 hours before the target hour (so the window is entirely within day D-1 and earlier); local hour of day, day of week, month, Danish public holiday flag, day-after-holiday flag. Lags and windows are in UTC so DST days don't shift them; hour-of-day is local time, because that is what drives demand. If a same-local-hour statistic is wanted later, it is a separately named feature with its own audit row. Tests prove that every window ends before the cutoff and never includes the target hour or anything after it.
 
-**Error analysis.** During development, on validation only: error by hour and month; the 20 worst days with what happened in the market that day where it's findable; whether failures cluster around spikes, negative prices, season changes or holidays. After the single test run, the same analysis on test is diagnostic and goes in the report; nothing is tuned afterwards. This section is the heart of the report.
+**Error analysis.** During development, on validation only: error by hour and month; the 20 worst days; whether failures cluster around spikes, negative prices, season changes or holidays. After the single test run, the same analysis on test is diagnostic and goes in the report; nothing is tuned afterwards. This section is the heart of the report.
 
 **Extreme-price diagnostic.** One small extra table: MAE and RMSE for hours above a high-price threshold and for hours at or below zero. The threshold is fixed from the training period (for example its 95th percentile) and written into `decisions.md` before the test run. Average accuracy and accuracy when it matters are different questions; this table answers the second without becoming a dashboard of metrics.
 
@@ -105,34 +105,43 @@ Features for both: price lags at 24, 48, 72, 168, 336 elapsed hours; rolling mea
 
 ## Spark decision
 
-The price data is small (a few hundred thousand rows). The only candidate for Spark is DMI observations, and only if weather enters the project. The rule: time the same ingest and aggregation in pandas, DuckDB and PySpark (local) on the actual volume; keep the simplest tool that does it in acceptable time; write the three numbers and the decision into the README. A README line saying "Spark was not needed, DuckDB did it in 4 s" is a legitimate engineering conclusion and a better CV line than an unneeded cluster.
+The price data is small (a few hundred thousand rows). The only candidate for Spark is DMI observations, and only if weather enters the project. The rule: time the same ingest and aggregation in pandas, DuckDB and PySpark (local) on the actual volume; keep the simplest tool that does it in acceptable time. Spark was not used: weather never entered the project because the external-features milestone was skipped (`docs/decisions.md`, 2026-11-05).
 
 ## Repository layout and conventions
 
 ```
 elvarsel/
   src/elvarsel/
-    fetch.py        pulls from the APIs into data/raw, idempotent, retries, pagination
+    fetch.py        pulls prices into data/raw, idempotent, retries, one request per calendar year (limit=0)
     clean.py        dedupe, resample, UTC index, gap handling
     features.py     lags, calendar, holiday flags
     baselines.py
     models.py
     evaluate.py     splits, metrics, by-hour and by-month tables
-    report.py       writes tables and figures to reports/
+    gap_report.py   gap-and-duplicate report on the raw data
+    final_run.py    the single test run, writes reports/test.md
   scripts/
-    run_all.py      fetch -> clean -> features -> train -> evaluate -> report
+    clean.py        one entry point per step; fetch runs as python -m elvarsel.fetch
+    features.py
+    evaluate.py
+    gap_report.py
+    final_run.py
   tests/
-    fixtures/       one month of raw data, committed
+    fixtures/       two months and one day of raw data, committed
     test_clean.py
-    test_features.py
     test_evaluate.py
-  notebooks/
-    exploration.ipynb   one notebook, outputs cleared before commit, exploration only
+    test_features.py
+    test_fetch.py
+    test_final_run.py
+    test_gap_report.py
+    test_models.py
+    test_package.py
+  notebooks/          empty
   docs/
     design.md
     leakage-audit.md
     decisions.md
-  reports/            generated tables and figures; the final ones are committed
+  reports/            generated tables and report.md, committed
   data/               gitignored
   README.md
   pyproject.toml
@@ -149,9 +158,9 @@ Tooling: `uv` for environments and lockfile, Python 3.12, `ruff` for lint and fo
 1. Question and forecasting contract, half a page.
 2. Data: sources, period, resolution, how many hours at or below zero, DST handling.
 3. Method: splits, baselines, models, features, with a pointer to the leakage audit.
-4. Results: one table, rows are the five candidates, columns are MAE and RMSE on test. One figure: MAE by hour. One figure: MAE by month. The extreme-price table.
-5. Error analysis: where the best model fails and why.
-6. Limitations and what you would do next.
+4. Results: one table, rows are the four candidates run on test (three baselines and ridge; gradient boosting was not run on test, see `docs/decisions.md` 2026-11-03), columns are MAE and RMSE on test and validation. No figures.
+5. Error analysis: where the best model fails, by hour, month, extreme prices and worst days. The full tables are in `reports/test.md`.
+6. Limitations.
 
 No adjectives. Numbers and sentences.
 
@@ -159,53 +168,53 @@ No adjectives. Numbers and sentences.
 
 **Milestone 1 — Data in hand (Oct 24–27)**
 
-- [ ] Repo, `pyproject.toml`, `uv` lock, `ruff`, `pytest`, CI, `.gitignore`, `.gitattributes`, `.editorconfig`, `docs/design.md`. First commit is these files only.
-- [ ] Confirm the Energinet dataset names, columns, resolution per period of history, interval-start vs interval-end timestamps, and earliest date for DK2 prices and for the wind/solar forecast series (with their issue-time field, if any); record them in `docs/decisions.md` with the date checked.
-- [ ] Decision entries by hand: why DK2 and not Denmark, the hourly-mean target definition, the cutoff.
-- [ ] `fetch.py` for prices: paginated, retrying, idempotent into `data/raw/`. One-month fixture including a DST transition committed. `--fixtures` mode on every script.
-- [ ] Gap-and-duplicate report on the raw data, committed to `reports/`.
-- [ ] `clean.py` written by hand: one row per hourly delivery interval keyed by UTC start, quarter-hours averaged into hours, duplicates resolved, gaps left as gaps. Tests, including both DST days of one year with 23 and 25 periods.
-- [ ] Decision entry: the split dates, fixed before any model exists.
-- [ ] `docs/leakage-audit.md` started with the price lags, rolling windows and calendar features.
+- [x] Repo, `pyproject.toml`, `uv` lock, `ruff`, `pytest`, CI, `.gitignore`, `.gitattributes`, `.editorconfig`, `docs/design.md`.
+- [x] Confirm the Energinet dataset names, columns, resolution per period of history, interval-start vs interval-end timestamps, and earliest date for DK2 prices and for the wind/solar forecast series (with their issue-time field, if any); record them in `docs/decisions.md` with the date checked.
+- [x] Decision entries: why DK2 and not Denmark, the hourly-mean target definition, the cutoff.
+- [x] `fetch.py` for prices: one request per calendar year with `limit=0`, retrying, idempotent into `data/raw/`. Fixtures committed: two months of `Elspotprices` and one day of `DayAheadPrices` (2025-10-26), including the 25-hour autumn day. `--fixtures` mode on every step except `final_run.py`.
+- [x] Gap-and-duplicate report on the raw data, committed to `reports/`.
+- [x] `clean.py`: one row per hourly delivery interval keyed by UTC start, quarter-hours averaged into hours, duplicates resolved, gaps left as gaps. Tests: `test_clean.py` covers the 25-hour autumn day; `test_features.py` covers the 23-hour spring day with synthetic data.
+- [x] Decision entry: the split dates, fixed before any model exists.
+- [x] `docs/leakage-audit.md` started with the price lags, rolling windows and calendar features.
 
 **Milestone 2 — Baselines and evaluation (Oct 29–31)**
 
-- [ ] `features.py` with the lag, rolling-window and calendar features. Tests that lag 24 on a DST day points at the UTC interval 24 elapsed hours earlier, and that every rolling window ends before the cutoff.
-- [ ] `evaluate.py`: chronological splits with delivery days kept whole, MAE and RMSE overall / by hour / by month, the extreme-price table, and the count of rows excluded for missing lags.
-- [ ] Three baselines evaluated on validation. Result table committed to `reports/`.
-- [ ] Decision entries: why MAPE is excluded, why splits are chronological, why lags are elapsed hours, the extreme-price threshold.
+- [x] `features.py` with the lag, rolling-window and calendar features. Tests that lag 24 on a DST day points at the UTC interval 24 elapsed hours earlier, and that every rolling window ends before the cutoff.
+- [x] `evaluate.py`: chronological splits with delivery days kept whole, MAE and RMSE overall / by hour / by month, the extreme-price table, and the count of rows excluded for missing lags.
+- [x] Three baselines evaluated on validation. Result table committed to `reports/`.
+- [x] Decision entries: why MAPE is excluded, why splits are chronological, why lags are elapsed hours, the extreme-price threshold.
 
 **Milestone 3 — Models (Nov 1–3)**
 
-- [ ] Ridge on the feature set; coefficients inspected and sanity-checked.
-- [ ] Gradient boosting on the same set; small grid on validation only.
-- [ ] Error analysis on validation: by hour, by month, worst 20 days.
-- [ ] Decision entry: what the model learned that the baselines didn't, or didn't.
+- [x] Ridge on the feature set; coefficients inspected and sanity-checked.
+- [x] Gradient boosting on the same set; small grid on validation only.
+- [x] Error analysis on validation: by hour, by month, worst 20 days.
+- [x] Decision entry: what the model learned that the baselines didn't, or didn't.
 
 **Milestone 4 — External features, if verifiable (Nov 5, skipped)** Energinet wind and solar forecasts are published after the 12:00 D-1 cutoff and are excluded, so this milestone is DMI-only or skipped. Skipped 2026-11-05: no verifiable DMI forecast archive; see `docs/decisions.md`.
 
-- [ ] DMI: only if an archive of past forecasts can be found. Otherwise one paragraph in Limitations.
-- [ ] Spark benchmark, only if DMI data enters. Three timings in the README.
+- [ ] DMI: only if an archive of past forecasts can be found. Otherwise one paragraph in Limitations. (skipped, see decisions.md 2026-11-05)
+- [ ] Spark benchmark, only if DMI data enters. (skipped, see decisions.md 2026-11-05)
 
 **Milestone 5 — Final run and report (Nov 6–8)**
 
-- [ ] One run on the untouched test period. Numbers frozen.
-- [ ] `reports/report.md` written by hand from the tables.
-- [ ] README by hand: what it is, how to run in three commands, the results table, the leakage audit link, limitations, what next.
+- [x] One run on the untouched test period. Numbers frozen.
+- [x] `reports/report.md` written from the tables.
+- [ ] README: what it is, how to run lint, tests and the fixture pipeline, the results table, the leakage audit link, limitations.
 - [ ] Fresh-eyes review, done cold: find any feature that uses information from the delivery day or later, any preprocessing fit on validation or test rows, any fillna or interpolation on the target, and any place where a DST day could misalign a lag. Do not fix anything; list them with file and line. Fix what is real, note what is not.
 - [ ] Optional: Streamlit page showing the test-period forecast vs actual, deployed to a free host.
 
 **Nov 9 — Buffer and verification**
 
-- [ ] Clone into a fresh directory, run `uv sync`, `uv run pytest` and `uv run python scripts/run_all.py --fixtures`. It works, or the README is wrong.
+- [ ] Clone into a fresh directory, run `uv sync`, `uv run pytest` and each pipeline step with `--fixtures`, as listed in the README. It works, or the README is wrong.
 - [ ] CV bullet written from the results table only.
-- [ ] CI green on `master`.
+- [x] CI green on `master`.
 
 ## Definition of done
 
-1. A clean clone runs lint, tests and the fixture pipeline with three commands.
+1. A clean clone runs lint and tests, then the offline fixture pipeline as listed in the README. `final_run.py` has no `--fixtures` mode, so the test run is not part of this check.
 2. `docs/leakage-audit.md` lists every feature with its availability, and nothing else is in the model.
-3. The report has one results table on an untouched test period, with MAE and RMSE for three baselines and two models, plus by-hour, by-month and extreme-price breakdowns.
+3. The report has one results table on an untouched test period, with MAE and RMSE for three baselines and ridge, the one model chosen on validation (gradient boosting was not run on test, see `docs/decisions.md` 2026-11-03), plus by-hour, by-month and extreme-price breakdowns in `reports/test.md`.
 4. The error analysis names where the model fails.
 5. You can explain, without notes: the cutoff, why a 24-hour lag is allowed, why actuals for D-1 are not, why the split is chronological, why MAPE is out, why lags are elapsed hours rather than local clock hours, and how many delivery periods a transition day has.
 
