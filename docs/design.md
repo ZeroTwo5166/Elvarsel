@@ -206,8 +206,8 @@ The report uses numbers and plain sentences, without adjectives.
 
 **Nov 9: Buffer and verification**
 
-- [ ] Fresh-clone check: `uv sync`, `uv run pytest` and each pipeline step with `--fixtures`, run in a new directory as listed in the README.
-- [ ] CV bullet written from the results table only.
+- [x] Fresh-clone check: `uv sync`, `uv run pytest` and each pipeline step with `--fixtures`, run in a new directory as listed in the README.
+- [x] CV bullet written from the results table only.
 - [x] CI green on `master`.
 
 ## Definition of done
